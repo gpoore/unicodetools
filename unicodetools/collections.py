@@ -25,7 +25,6 @@ import os
 from . import err
 from . import coding
 import itertools
-import re
 
 
 # pylint: disable=E0602, W0622
@@ -67,7 +66,7 @@ class CodePointRange(object):
             last = ord(last)
         if not first <= last:
             raise err.InitError('Must have "first" <= "last"')
-        if any(0xD800 <= x <= 0xDFFF for x in (first, last)) and not unpaired_surrogates:
+        if (any(0xD800 <= x <= 0xDFFF for x in (first, last)) or (first < 0xD800 and last > 0xDFFF)) and not unpaired_surrogates:
             raise err.InitError('Individual Unicode surrogates (U+D800 - U+DFFF) are not allowed by default; use "unpaired_surrogates"=True if you must have them')
         if any(x < 0 or x > 0x10FFFF for x in (first, last)):
             raise err.InitError('"first" and "last" must be in the range [0, 0x10FFFF]')
@@ -99,37 +98,47 @@ class CodePointRange(object):
         return self.first <= value <= self.last
 
 
-    def as_generic_re_pattern(self, utf16=False):
+    def as_generic_re_pattern(self, utf16=False, escapefunc=None):
         '''
-        Express the range as a generic regular expression pattern.  This is
-        suitable for compiling with the `re` package under Python 3.3+
-        (with the default setting of `utf16=False`), but MUST NOT be used
-        with any earlier version of Python, because the result may compile
-        but WILL NOT not work correctly since `\\u` and `\\U` escapes were
-        not recognized prior to Python 3.3.
+        Express the range as a generic regular expression pattern.  With the
+        default settings, this is suitable for compiling with the `re`
+        module under Python 3.3+, but MUST NOT be used with any earlier
+        version of Python, because the result may compile but WILL NOT work
+        correctly since `\\u` and `\\U` escapes were not recognized prior to
+        Python 3.3.
 
-        Reference for escapes:  https://docs.python.org/3.6/library/re.html
+        If `utf16=True`, Unicode surrogate pairs are used to represent code
+        points above 0xFFFF.
+
+        If `escapefunc` is provided, it must be a function that takes a code
+        point as an integer and returns an appropriately escaped string
+        representation suitable for use either individually or as part of
+        a regular expression range `[<first>-<last>]`.
+
+        Reference for `re` escape support:
+            https://docs.python.org/3.6/library/re.html
         '''
         if utf16 not in (True, False):
             raise TypeError('"utf16" must be boolean')
+        if escapefunc is None:
+            def ef(cp):
+                if cp <= 0xFFFF:
+                    return '\\u{0:04X}'.format(cp)
+                return '\\U{0:08X}'.format(cp)
+            escapefunc = ef
+        elif not hasattr(escapefunc, '__call__'):
+            raise TypeError('"escapefunc" must be callable')
         if self.first == self.last:
-            if self.first <= 0xFFFF:
-                pattern = '\\u{0:04X}'.format(self.first)
-            elif not utf16:
-                pattern = '\\U{1:08X}'.format(self.first)
+            if not utf16:
+                pattern = escapefunc(self.first)
             else:
-                pattern = '\\u{0:04X}\\u{1:04X}'.format(cp for cp in coding.chr_surrogate(self.first))
-        elif self.last <= 0xFFFF:
-            pattern = '[\\u{0:04X}-\\u{1:04X}]'.format(self.first, self.last)
-        elif not utf16:
-            if self.first <= 0xFFFF:
-                pattern = '[\\u{0:04X}-\\U{1:08X}]'.format(self.first, self.last)
-            else:
-                pattern = '[\\U{0:08X}-\\U{1:08X}]'.format(self.first, self.last)
+                pattern = ''.join(escapefunc(ord(c)) for c in coding.chr_surrogate(self.first))
+        elif not utf16 or self.last <= 0xFFFF:
+            pattern = '[{0}-{1}]'.format(escapefunc(self.first), escapefunc(self.last))
         else:
             sub_patterns = []
             if self.first <= 0xFFFF:
-                sub_patterns.append('[\\u{0:04X}-\\uFFFF]'.format(self.first))
+                sub_patterns.append('[{0}-{1}]'.format(escapefunc(self.first), escapefunc(0xFFFF)))
                 first_astral = 0xFFFF+1
                 last_astral = self.last
             else:
@@ -147,9 +156,9 @@ class CodePointRange(object):
                 if cp_next is None:
                     low_last = l
                     if low_first == low_last:
-                        sub_patterns.append('\\u{0:04X}\\u{1:04X}'.format(high, low_first))
+                        sub_patterns.append('{0}{1}'.format(escapefunc(high), escapefunc(low_first)))
                     else:
-                        sub_patterns.append('\\u{0:04X}[\\u{1:04X}-\\u{2:04X}]'.format(high, low_first, low_last))
+                        sub_patterns.append('{0}[{1}-{2}]'.format(escapefunc(high), escapefunc(low_first), escapefunc(low_last)))
                 else:
                     h_next, l_next = (ord(c) for c in coding.chr_surrogate(cp_next))
                     # Don't need `l_next != l + 1` check since working with
@@ -157,9 +166,9 @@ class CodePointRange(object):
                     if h_next != h:
                         low_last = l
                         if low_first == low_last:
-                            sub_patterns.append('\\u{0:04X}\\u{1:04X}'.format(high, low_first))
+                            sub_patterns.append('{0}{1}'.format(escapefunc(high), escapefunc(low_first)))
                         else:
-                            sub_patterns.append('\\u{0:04X}[\\u{1:04X}-\\u{2:04X}]'.format(high, low_first, low_last))
+                            sub_patterns.append('{0}[{1}-{2}]'.format(escapefunc(high), escapefunc(low_first), escapefunc(low_last)))
                         high = None
             pattern = '|'.join(p for p in sub_patterns)
         return pattern
@@ -168,35 +177,26 @@ class CodePointRange(object):
     def as_python_3_3_plus_re_pattern(self):
         '''
         Express the range as a regular expression pattern suitable for
-        compiling with Python 3.3+.
+        compiling with `re` with Python 3.3+.
         '''
         return self.as_generic_re_pattern()
-
-
-    # Include upper and lower case in substitution just in case default
-    # from `.as_generic_re_pattern()` ever changes
-    _unicode_escape_re = re.compile(r'\\u[0-9A-Fa-f]{4}|\\U[0-9A-Fa-f]{8}')
-
-
-    def _unicode_escapes_to_escaped_code_points(self, s):
-        '''
-        Convert `\\u` and `\\U` Unicode escapes into literal code points,
-        with backslash escaping provided by `re.escape()` as needed.
-        '''
-        return self._unicode_escape_re.sub(lambda m: re.escape(chr(int(m.group(0)[2:], 16))), s)
 
 
     def as_python_before_3_3_re_pattern(self, **kwargs):
         '''
         Express the range as a regular expression pattern suitable for
-        compiling with Python < 3.3, with the specified build width.
+        compiling with `re` with Python < 3.3, with the specified build width.
         '''
         if 'utf16' not in kwargs:
             raise TypeError('Keyword argument "utf16" (build width) is required')
         utf16 = kwargs.pop('utf16')
         if kwargs:
             raise TypeError('Invalid keyword argument(s):  {0}'.format(' '.join(str(k) for k in kwargs)))
-        return self._unicode_escapes_to_escaped_code_points(self.as_generic_re_pattern(utf16))
+        def ef(cp):
+            if any(ord(first) <= cp <= ord(last) for first, last in [('0', '9'), ('A', 'Z'), ('a', 'z')]):
+                return chr(cp)
+            return '\\' + chr(cp)
+        return self.as_generic_re_pattern(utf16=utf16, escapefunc=ef)
 
 
     def as_current_python_version_re_pattern(self):
@@ -211,7 +211,7 @@ class CodePointRange(object):
                 utf16 = True
             else:
                 utf16 = False
-            version_pattern = self.as_python_before_3_3_re_pattern(utf16)
+            version_pattern = self.as_python_before_3_3_re_pattern(utf16=utf16)
         else:
             version_pattern = self.as_python_3_3_plus_re_pattern()
         return version_pattern

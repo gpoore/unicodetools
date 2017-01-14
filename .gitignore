@@ -1,3 +1,13 @@
+*.cache/
+*/__pycache__/*
+*.coverage
+htmlcov/
+*.ipynb
+*.bat
+*research/
+*.pyc
+
+
 # Windows image file caches
 Thumbs.db
 ehthumbs.db

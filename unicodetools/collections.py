@@ -21,7 +21,6 @@ from __future__ import (division, print_function, absolute_import,
 
 
 import sys
-import os
 from . import err
 from . import coding
 import itertools
@@ -49,7 +48,7 @@ class CodePointRange(object):
     `.first` and `.last` are integers, and iterating over the object also
     yields integers.  This avoids complications on narrow Python builds.
 
-    The more Pythonic `.start`, `.end` are not used, because range regular
+    The more Pythonic `.start` and `.end` are not used, because range regular
     expressions of the form `[\\Uxxxxxxxx-\\Uxxxxxxxx]` include both the
     first and last code points matched.
     '''
@@ -57,19 +56,19 @@ class CodePointRange(object):
 
     def __init__(self, first, last, unpaired_surrogates=False):
         if not all(isinstance(x, int) or isinstance(x, str) for x in (first, last)):
-            raise err.InitError('"first" and "last" must be integers or strings that represent single code points')
+            raise TypeError('"first" and "last" must be integers or strings that represent single code points')
         if unpaired_surrogates not in (True, False):
-            raise err.InitError('"unpaired_surrogates" must be boolean')
+            raise TypeError('"unpaired_surrogates" must be boolean')
         if isinstance(first, str):
             first = ord(first)
         if isinstance(last, str):
             last = ord(last)
         if not first <= last:
-            raise err.InitError('Must have "first" <= "last"')
-        if (any(0xD800 <= x <= 0xDFFF for x in (first, last)) or (first < 0xD800 and last > 0xDFFF)) and not unpaired_surrogates:
-            raise err.InitError('Individual Unicode surrogates (U+D800 - U+DFFF) are not allowed by default; use "unpaired_surrogates"=True if you must have them')
+            raise ValueError('Must have "first" <= "last"')
+        if (first <= 0xD800 <= last or first <= 0xDFFF <= last) and not unpaired_surrogates:
+            raise ValueError('Individual Unicode surrogates (U+D800 - U+DFFF) are not allowed by default; use "unpaired_surrogates"=True if you must have them')
         if any(x < 0 or x > 0x10FFFF for x in (first, last)):
-            raise err.InitError('"first" and "last" must be in the range [0, 0x10FFFF]')
+            raise ValueError('"first" and "last" must be in the range [0, 0x10FFFF]')
         self.first = first
         self.last = last
         self.unpaired_surrogates = unpaired_surrogates
@@ -177,7 +176,7 @@ class CodePointRange(object):
     def as_python_3_3_plus_re_pattern(self):
         '''
         Express the range as a regular expression pattern suitable for
-        compiling with `re` with Python 3.3+.
+        compiling with `re` under Python 3.3+.
         '''
         return self.as_generic_re_pattern()
 
@@ -185,13 +184,14 @@ class CodePointRange(object):
     def as_python_before_3_3_re_pattern(self, **kwargs):
         '''
         Express the range as a regular expression pattern suitable for
-        compiling with `re` with Python < 3.3, with the specified build width.
+        compiling with `re` under Python < 3.3, with the specified build
+        width.
         '''
         if 'utf16' not in kwargs:
             raise TypeError('Keyword argument "utf16" (build width) is required')
         utf16 = kwargs.pop('utf16')
         if kwargs:
-            raise TypeError('Invalid keyword argument(s):  {0}'.format(' '.join(str(k) for k in kwargs)))
+            raise TypeError('Invalid keyword argument(s):  {0}'.format(', '.join(str(k) for k in kwargs)))
         def ef(cp):
             if any(ord(first) <= cp <= ord(last) for first, last in [('0', '9'), ('A', 'Z'), ('a', 'z')]):
                 return chr(cp)
@@ -202,7 +202,7 @@ class CodePointRange(object):
     def as_current_python_version_re_pattern(self):
         '''
         Express the range as a regular expression pattern suitable for
-        compiling with the current version of Python.  This accounts for
+        compiling under the current version of Python.  This accounts for
         whether `\\u` and `\\U` escapes are supported (Python 3.3+) as well
         as wide vs. narrow builds (Python < 3.3).
         '''
@@ -226,15 +226,15 @@ def containers_to_codepointranges(*containers, **kwargs):
     '''
     codepoints = set()
     if len(containers) == 0:
-        raise err.InitError('One or more containers (tuples, lists, sets) are required as arguments')
+        raise TypeError('One or more containers (tuples, lists, sets) are required as arguments')
     unpaired_surrogates = kwargs.pop('unpaired_surrogates', False)
     if unpaired_surrogates not in (True, False):
-        raise err.InitError('"unpaired_surrogates" must be boolean')
+        raise ValueError('"unpaired_surrogates" must be boolean')
     if kwargs:
-        raise err.InitError('Unknown keyword argument(s):  {0}'.format(', '.join(k for k in kwargs)))
+        raise TypeError('Unknown keyword argument(s):  {0}'.format(', '.join(str(k) for k in kwargs)))
     for container in containers:
         if not any(isinstance(container, t) for t in (tuple, list, set)):
-            raise err.InitError('Arguments must be instances of tuple, list, or set')
+            raise TypeError('Arguments must be instances of tuple, list, or set')
         if all(isinstance(x, int) for x in container):
             for x in container:
                 codepoints.update((x,))
@@ -244,17 +244,17 @@ def containers_to_codepointranges(*containers, **kwargs):
                 # builds or for Python 3.3+, so no additional checking is
                 # needed; `ord()` will raise any necessary errors.
                 x_int = ord(x)
-                if not unpaired_surrogates and 0xD800 <= x_int <= 0xDFFF:
-                    raise err.InitError('Individual Unicode surrogates (U+D800 - U+DFFF) are not allowed by default; use "unpaired_surrogates"=True if you must have them')
+                if 0xD800 <= x_int <= 0xDFFF and not unpaired_surrogates:
+                    raise ValueError('Individual Unicode surrogates (U+D800 - U+DFFF) are not allowed by default; use "unpaired_surrogates"=True if you must have them')
                 codepoints.update((x_int,))
         else:
-            raise err.InitError('Arguments must be containers consisting solely of integers or solely of Unicode strings that represent individual code points')
+            raise TypeError('Arguments must be containers consisting solely of integers or solely of Unicode strings that represent individual code points')
     if not codepoints:
-        raise err.InitError('Arguments must be non-empty containers')
+        raise TypeError('Arguments must be non-empty containers')
 
     sorted_codepoints = sorted(codepoints)
     if sorted_codepoints[0] < 0 or sorted_codepoints[-1] > 0x10FFFF:
-        raise err.InitError('Valid code points are in the range [0, 0x10FFFF]')
+        raise ValueError('Valid code points are in the range [0, 0x10FFFF]')
 
     codepoint_ranges = []
     first = None

@@ -8,10 +8,10 @@
 #
 
 '''
-Define verions of `chr()` and `ord()` that can accept or emit Unicode
-surrogate pairs.  This is important when working with narrow Python builds,
-and for generating regular expressions that will be used in languages whose
-native string implementation is based on UTF-16.
+Versions of `chr()` and `ord()` that can work with Unicode surrogate pairs.
+This is important when working with narrow Python builds, and for generating
+regular expressions that will be used in languages whose native string
+implementation is based on UTF-16.
 '''
 
 

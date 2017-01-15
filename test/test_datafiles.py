@@ -220,7 +220,7 @@ def test_script_extensions():
 
 
 def test_confusables():
-    cfs = mdl.UCDFiles().confusables
+    cfs = mdl.SecurityFiles().confusables
     assert cfs[0x05AD].confusable == (0x0596,)
     assert cfs[0x06E8].confusable == (0x0306, 0x0307)
     assert cfs[0x2026].confusable == (0x002E, 0x002E, 0x002E)
@@ -228,11 +228,11 @@ def test_confusables():
 
 
 def test_exceptions():
-    with pytest.raises(err.InitError):
+    with pytest.raises(TypeError):
         mdl.UCDFiles(unicode_version='a', data_path='a')
-    with pytest.raises(err.InitError):
+    with pytest.raises(TypeError):
         mdl.UCDFiles(data_path=1)
-    with pytest.raises(err.InitError):
+    with pytest.raises(TypeError):
         mdl.UCDFiles(unicode_version=1)
 
 

@@ -24,17 +24,3 @@ class DataError(UnicodeToolsError):
     Error in internal or loaded data.
     '''
     pass
-
-
-class InitError(UnicodeToolsError):
-    '''
-    Error in user-specified initialization.
-    '''
-    pass
-
-
-class ValueError(UnicodeToolsError):
-    '''
-    Correct type but incorrect value.
-    '''
-    pass

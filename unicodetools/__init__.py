@@ -10,5 +10,5 @@
 
 from .version import __version__
 
-from .datafiles import UCDFiles, UNICODE_VERSION
+from .datafiles import UNICODE_VERSION, UCDFiles, SecurityFiles
 from .collections import CodePointRange, containers_to_codepointranges

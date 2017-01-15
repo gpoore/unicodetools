@@ -64,7 +64,7 @@ def test_CodePointRange():
     for first, last in [(-1, 10), (11, 10), (0, 0x10FFFF+1),
                         (0xD800, 0x10FFFF), ('\uD800', '\U0010FFFF'),
                         (0, 0xDFFF), ('\u0000', '\uDFFF')]:
-        with pytest.raises(err.InitError):
+        with pytest.raises(ValueError):
             mdl.CodePointRange(first, last)
 
     assert mdl.CodePointRange(0, 10) == mdl.CodePointRange(0, 10)
@@ -118,7 +118,7 @@ def test_containers_to_codepointranges():
     assert mdl.containers_to_codepointranges([chr(x) for x in cps2], [chr(x) for x in cps1]) == ans12
 
     for cp_first, cp_last in [(-1, 1), (0x10FFFF, 0x10FFFF+1), (0, 0xD800), (0xDFFF, 0x10FFFF)]:
-        with pytest.raises(err.InitError):
+        with pytest.raises(ValueError):
             mdl.containers_to_codepointranges([cp_first, cp_last])
     for cp_first, cp_last in [(0, 0xD800), (0xDFFF, 0x10FFFF)]:
         ans = [mdl.CodePointRange(cp_first, cp_last, unpaired_surrogates=True)]

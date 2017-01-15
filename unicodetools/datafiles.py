@@ -8,7 +8,8 @@
 #
 
 '''
-Extract data from files in the Unicode Character Database (UCD).
+Extract data from files in the Unicode Character Database (UCD) or files in
+UTS #39: Unicode Security Mechanisms.
 
 Code points are always represented as integers in the processed data.  This
 avoids potential complications on narrow Python builds.
@@ -79,7 +80,7 @@ UnicodeData_CodePoint = collections.namedtuple('UnicodeData_CodePoint',
 
 
 # Class for data extracted from Unicode property files containing multiple
-# properties per code point.  `.properties` should be a dict.  For boolean
+# properties per code point.  `.Properties` should be a dict.  For boolean
 # properties, all keys will have the value True.
 Properties_CodePoint = collections.namedtuple('Properties_CodePoint',
                                               ['Code_Point', 'Properties'])
@@ -171,44 +172,28 @@ for d in (ucd_subexpression_regex_patterns, ucd_property_regex_patterns, ucd_oth
 
 
 
-class UCDFiles(object):
+class Files(object):
     '''
-    Interface for files in the Unicode Character Database (UCD).
+    Generic data files base class.
 
     By default, Unicode 9.0.0 data files are loaded.  If `unicode_version` is
     specified, the corresponding version will be used if it exists in the
     package data directory.  Files outside the package directory may also be
     used by providing `data_path`.  Note that data files for other versions
     must currently have a format that is strictly compatible with 9.0.0.
-
-    To maximize performance, all data files are only loaded on use.
     '''
     def __init__(self, unicode_version=None, data_path=None):
         if unicode_version is not None and data_path is not None:
-            raise err.InitError('Options "unicode_version" and "data_path" are mutually exclusive')
+            raise TypeError('Options "unicode_version" and "data_path" are mutually exclusive')
         if any(x is not None and not isinstance(x, str) for x in (unicode_version, data_path)):
-            raise err.InitError('Options "unicode_version" and "data_path" must be None or strings')
+            raise TypeError('Options "unicode_version" and "data_path" must be None or strings')
         self.unicode_version = unicode_version
         self.data_path = data_path
 
-        self._Blocks = None
-        self._confusables = None
-        self._DerivedBidiClass = None
-        self._DerivedCoreProperties = None
-        self._DerivedEastAsianWidth = None
-        self._DerivedJoiningType = None
-        self._DerivedNumericType = None
-        self._DerivedNumericValues = None
-        self._EastAsianWidth = None
-        self._PropList = None
-        self._ScriptExtensions = None
-        self._Scripts = None
-        self._UnicodeData = None
 
-
-    def _load_ucd_data(self, fname):
+    def _load_data(self, fname):
         '''
-        Load UCD data file, either from the package data directory or from
+        Load data file, either from the package data directory or from
         a specified data path.
         '''
         if self.data_path is not None:
@@ -219,12 +204,12 @@ class UCDFiles(object):
                         with z.open('{0}.txt'.format(fname)) as f:
                             raw_data = f.read()
                     else:
-                        raise err.InitError('Could not find data file "{0}.txt" in zip archive "{1}.zip"'.format(fname, fpath_fname))
+                        raise ValueError('Could not find data file "{0}.txt" in zip archive "{1}.zip"'.format(fname, fpath_fname))
             elif os.path.isfile('{0}.txt'.format(fpath_fname)):
                 with open('{0}.txt'.format(fpath_fname), 'rb') as f:
                     raw_data = f.read()
             else:
-                raise err.InitError('Could not find data file "{0}" in .txt or .zip forms in directory "{1}"'.format(fname, self.data_path))
+                raise ValueError('Could not find data file "{0}" in .txt or .zip forms in directory "{1}"'.format(fname, self.data_path))
         else:
             if self.unicode_version is None:
                 unicode_version = UNICODE_VERSION
@@ -240,6 +225,109 @@ class UCDFiles(object):
         # possibly other files.
         data = raw_data.decode('utf_8_sig')
         return data
+
+
+    _codepoint_single_property_line_re = re.compile(r'(?P<Code_Point>{codePoint}|{codePoint}\.\.{codePoint})\s*;\s*(?P<Property>{Generic_Property})\s*#.*$'.format(**ucd_regex_patterns))
+
+
+    def _get_multiple_boolean_properties(self, properties_file):
+        '''
+        Load and process a properties file containing multiple properties
+        per code point with boolean values.
+        '''
+        data = self._load_data(properties_file)
+        cp_properties = collections.OrderedDict()
+        for line in data.splitlines():
+            line = line.strip()
+            if line and line[:1] != '#':
+                gd = self._codepoint_single_property_line_re.match(line).groupdict()
+                codepoint = gd['Code_Point']
+                prop = gd['Property']
+                if '..' in codepoint:
+                    first, last = codepoint.split('..')
+                    for cp in range(int(first, 16), int(last, 16)+1):
+                        if cp not in cp_properties:
+                            cp_properties[cp] = Properties_CodePoint(cp, collections.OrderedDict())
+                        cp_properties[cp].Properties[prop] = True
+                else:
+                    cp = int(codepoint, 16)
+                    if cp not in cp_properties:
+                        cp_properties[cp] = Properties_CodePoint(cp, collections.OrderedDict())
+                    cp_properties[cp].Properties[prop] = True
+        return cp_properties
+
+
+    _codepoint_single_value_line_re = re.compile(r'(?P<Code_Point>{codePoint}|{codePoint}\.\.{codePoint})\s*;\s*(?P<Value>{Generic_Value})\s*#.*$'.format(**ucd_regex_patterns))
+
+
+    def _get_single_string_property(self, property_file, property_name, postprocess=None, line_re=None):
+        '''
+        Load and process a properties file containing a single property
+        per code point with string values.
+
+        Keyword arguments `postprocess` and `line_re` allow a special
+        processing function and a special line regex to be specified.
+        '''
+        data = self._load_data(property_file)
+        cp_property = collections.OrderedDict()
+        property_namedtuple = _generate_single_property_namedtuple(property_file, property_name)
+        if postprocess is not None and not hasattr(postprocess, '__call__'):
+            raise TypeError('Invalid argument "postprocess"; must be callable')
+        if line_re is None:
+            line_re = self._codepoint_single_value_line_re
+        for line in data.splitlines():
+            line = line.strip()
+            if line and line[:1] != '#':
+                gd = line_re.match(line).groupdict()
+                codepoint = gd['Code_Point']
+                if '..' in codepoint:
+                    first, last = codepoint.split('..')
+                    for cp in range(int(first, 16), int(last, 16)+1):
+                        if cp in cp_property:
+                            raise err.DataError('Multiple properties encountered for U+{0:04X}; only a single property was expected'.format(cp))
+                        if postprocess is not None:
+                            cp_property[cp] = property_namedtuple(cp, postprocess(gd))
+                        else:
+                            cp_property[cp] = property_namedtuple(cp, gd['Value'])
+                else:
+                    cp = int(codepoint, 16)
+                    if cp in cp_property:
+                        raise err.DataError('Multiple properties encountered for U+{0:04X}; only a single property was expected'.format(cp))
+                    if postprocess is not None:
+                        cp_property[cp] = property_namedtuple(cp, postprocess(gd))
+                    else:
+                        cp_property[cp] = property_namedtuple(cp, gd['Value'])
+        return cp_property
+
+
+
+
+class UCDFiles(Files):
+    '''
+    Interface for files in the Unicode Character Database (UCD).
+
+    By default, Unicode 9.0.0 data files are loaded.  If `unicode_version` is
+    specified, the corresponding version will be used if it exists in the
+    package data directory.  Files outside the package directory may also be
+    used by providing `data_path`.  Note that data files for other versions
+    must currently have a format that is strictly compatible with 9.0.0.
+
+    To maximize performance, all data files are only loaded on use.
+    '''
+    def __init__(self, **kwargs):
+        super(self.__class__, self).__init__(**kwargs)
+        self._Blocks = None
+        self._DerivedBidiClass = None
+        self._DerivedCoreProperties = None
+        self._DerivedEastAsianWidth = None
+        self._DerivedJoiningType = None
+        self._DerivedNumericType = None
+        self._DerivedNumericValues = None
+        self._EastAsianWidth = None
+        self._PropList = None
+        self._ScriptExtensions = None
+        self._Scripts = None
+        self._UnicodeData = None
 
 
     # Tables for deriving Hangul syllable names.
@@ -263,7 +351,7 @@ class UCDFiles(object):
         '''
         cp_index = cp - 0xAC00
         if cp_index < 0 or cp_index >= 11172:
-            raise err.ValueError('The code point {0:04X} is not a Hangul Syllable'.format(cp))
+            raise ValueError('The code point {0:04X} is not a Hangul Syllable'.format(cp))
         l_index = cp_index // 588
         v_index = (cp_index % 588) // 28
         t_index = cp_index % 28
@@ -286,7 +374,7 @@ class UCDFiles(object):
         '''
         cp_index = cp - 0xAC00
         if cp_index < 0 or cp_index >= 11172:
-            raise err.ValueError('The code point {0:04X} is not a Hangul Syllable'.format(cp))
+            raise ValueError('The code point {0:04X} is not a Hangul Syllable'.format(cp))
         cp_t = 0x11A7 + cp_index % 28
         if cp_t != 0x11A7:
             # Using integer arithmetic here, so can't simplify math further
@@ -318,14 +406,13 @@ class UCDFiles(object):
 
     _unicodedata_re = re.compile(_unicodedata_pattern, re.VERBOSE)
 
-
     @property
     def UnicodeData(self):
         '''
         Data from UnicodeData.txt.
         '''
         if self._UnicodeData is None:
-            data = self._load_ucd_data('UnicodeData')
+            data = self._load_data('UnicodeData')
             unicodedata = collections.OrderedDict()
             try:
                 # Create an iterator, so that when the first line of a code
@@ -454,81 +541,7 @@ class UCDFiles(object):
         return self._UnicodeData
 
 
-    _codepoint_single_property_line_re = re.compile(r'(?P<Code_Point>{codePoint}|{codePoint}\.\.{codePoint})\s*;\s*(?P<Property>{Generic_Property})\s*#.*$'.format(**ucd_regex_patterns))
-
-
-    def _get_multiple_boolean_properties(self, properties_file):
-        '''
-        Load and process a properties file containing multiple properties
-        per code point with boolean values.
-        '''
-        data = self._load_ucd_data(properties_file)
-        cp_properties = collections.OrderedDict()
-        for line in data.splitlines():
-            line = line.strip()
-            if line and line[:1] != '#':
-                gd = self._codepoint_single_property_line_re.match(line).groupdict()
-                codepoint = gd['Code_Point']
-                prop = gd['Property']
-                if '..' in codepoint:
-                    first, last = codepoint.split('..')
-                    for cp in range(int(first, 16), int(last, 16)+1):
-                        if cp not in cp_properties:
-                            cp_properties[cp] = Properties_CodePoint(cp, collections.OrderedDict())
-                        cp_properties[cp].Properties[prop] = True
-                else:
-                    cp = int(codepoint, 16)
-                    if cp not in cp_properties:
-                        cp_properties[cp] = Properties_CodePoint(cp, collections.OrderedDict())
-                    cp_properties[cp].Properties[prop] = True
-        return cp_properties
-
-
-    _codepoint_single_value_line_re = re.compile(r'(?P<Code_Point>{codePoint}|{codePoint}\.\.{codePoint})\s*;\s*(?P<Value>{Generic_Value})\s*#.*$'.format(**ucd_regex_patterns))
-
-
-    def _get_single_string_property(self, property_file, property_name, postprocess=None, line_re=None):
-        '''
-        Load and process a properties file containing a single property
-        per code point with string values.
-
-        Keyword arguments `postprocess` and `line_re` allow a special
-        processing function and a special line regex to be specified.
-        '''
-        data = self._load_ucd_data(property_file)
-        cp_property = collections.OrderedDict()
-        property_namedtuple = _generate_single_property_namedtuple(property_file, property_name)
-        if postprocess is not None and not hasattr(postprocess, '__call__'):
-            raise err.InitError('Invalid argument "postprocess"; must be callable')
-        if line_re is None:
-            line_re = self._codepoint_single_value_line_re
-        for line in data.splitlines():
-            line = line.strip()
-            if line and line[:1] != '#':
-                gd = line_re.match(line).groupdict()
-                codepoint = gd['Code_Point']
-                if '..' in codepoint:
-                    first, last = codepoint.split('..')
-                    for cp in range(int(first, 16), int(last, 16)+1):
-                        if cp in cp_property:
-                            raise err.DataError('Multiple properties encountered for U+{0:04X}; only a single property was expected'.format(cp))
-                        if postprocess is not None:
-                            cp_property[cp] = property_namedtuple(cp, postprocess(gd))
-                        else:
-                            cp_property[cp] = property_namedtuple(cp, gd['Value'])
-                else:
-                    cp = int(codepoint, 16)
-                    if cp in cp_property:
-                        raise err.DataError('Multiple properties encountered for U+{0:04X}; only a single property was expected'.format(cp))
-                    if postprocess is not None:
-                        cp_property[cp] = property_namedtuple(cp, postprocess(gd))
-                    else:
-                        cp_property[cp] = property_namedtuple(cp, gd['Value'])
-        return cp_property
-
-
     _blocks_line_re = re.compile(r'(?P<Code_Point>{codePoint}|{codePoint}\.\.{codePoint})\s*;\s*(?P<Value>{Block})$'.format(**ucd_regex_patterns))
-
 
     @property
     def Blocks(self):
@@ -538,21 +551,6 @@ class UCDFiles(object):
         if self._Blocks is None:
             self._Blocks = self._get_single_string_property('Blocks', 'Block', line_re=self._blocks_line_re)
         return self._Blocks
-
-
-    _confusables_line_re = re.compile(r'(?P<Code_Point>{codePoint})\s*;\s*(?P<confusable>{codePoints})\s*;\s*MA\s*#.*$'.format(**ucd_regex_patterns))
-
-
-    @property
-    def confusables(self):
-        '''
-        Data from confusables.txt.
-        '''
-        if self._confusables is None:
-            self._confusables = self._get_single_string_property('confusables', 'confusable',
-                                                                 postprocess=lambda gd: tuple(int(x, 16) for x in gd['confusable'].split('\x20')),
-                                                                 line_re=self._confusables_line_re)
-        return self._confusables
 
 
     @property
@@ -607,7 +605,6 @@ class UCDFiles(object):
 
     _derived_numeric_values_line_re = re.compile(r'(?P<Code_Point>{codePoint}|{codePoint}\.\.{codePoint})\s*;\s*{decimal}\s*;\s*;\s*(?P<Value>{rational})\s*#.*$'.format(**ucd_regex_patterns))
 
-
     @property
     def DerivedNumericValues(self):
         '''
@@ -640,7 +637,6 @@ class UCDFiles(object):
 
     _script_extensions_line_re = re.compile(r'(?P<Code_Point>{codePoint}|{codePoint}\.\.{codePoint})\s*;\s*(?P<Scripts>{Script}(\x20{Script})*)\s*#.*$'.format(**ucd_regex_patterns))
 
-
     @property
     def ScriptExtensions(self):
         '''
@@ -666,3 +662,36 @@ class UCDFiles(object):
         if self._Scripts is None:
             self._Scripts = self._get_single_string_property('Scripts', 'Script')
         return self._Scripts
+
+
+
+
+class SecurityFiles(Files):
+    '''
+    Interface for files from UTS #39: Unicode Security Mechanisms.
+
+    By default, Unicode 9.0.0 data files are loaded.  If `unicode_version` is
+    specified, the corresponding version will be used if it exists in the
+    package data directory.  Files outside the package directory may also be
+    used by providing `data_path`.  Note that data files for other versions
+    must currently have a format that is strictly compatible with 9.0.0.
+
+    To maximize performance, all data files are only loaded on use.
+    '''
+    def __init__(self, **kwargs):
+        super(self.__class__, self).__init__(**kwargs)
+        self._confusables = None
+
+
+    _confusables_line_re = re.compile(r'(?P<Code_Point>{codePoint})\s*;\s*(?P<confusable>{codePoints})\s*;\s*MA\s*#.*$'.format(**ucd_regex_patterns))
+
+    @property
+    def confusables(self):
+        '''
+        Data from confusables.txt.
+        '''
+        if self._confusables is None:
+            self._confusables = self._get_single_string_property('confusables', 'confusable',
+                                                                 postprocess=lambda gd: tuple(int(x, 16) for x in gd['confusable'].split('\x20')),
+                                                                 line_re=self._confusables_line_re)
+        return self._confusables

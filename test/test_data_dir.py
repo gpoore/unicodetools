@@ -31,7 +31,7 @@ import io
 import zipfile
 
 
-TEST_AGAINST_REMOTE_UNICODE_ORG = False
+VERIFY_WITH_UNICODE_WEBSITE = False
 
 
 
@@ -96,6 +96,6 @@ def test_data_dir():
         h = hashlib.sha256()
         h.update(raw_data)
         assert h.hexdigest() == fdata['sha256']
-        if TEST_AGAINST_REMOTE_UNICODE_ORG:
+        if VERIFY_WITH_UNICODE_WEBSITE:
             remote_sha256 = hash_remote_file(fdata['url'])
             assert h.hexdigest() == remote_sha256

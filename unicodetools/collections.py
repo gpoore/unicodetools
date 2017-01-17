@@ -308,6 +308,11 @@ class CodePointMultiRange(object):
     '''
     A collection of non-overlapping CodePointRanges.  Methods allow the
     creation of minimal regular expression patterns.
+
+    A single keyword argument is required in initialization.  Keyword
+    `codepoints` specifies a sequence of code points that will be converted
+    to a list of CodePointRange instances.  Keyword `codepointranges`
+    specifies a sequence of CodePointRange instances.
     '''
     def __init__(self, *args, **kwargs):
         if args:

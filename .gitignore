@@ -6,6 +6,9 @@ htmlcov/
 *.bat
 *research/
 *.pyc
+build/
+dist/
+*.egg-info/
 
 
 # Windows image file caches

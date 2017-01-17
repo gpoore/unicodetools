@@ -31,6 +31,7 @@ if sys.version_info.major == 2:
     str = unicode
     chr = unichr
     itertools.zip_longest = itertools.izip_longest
+    range = xrange
 # pylint: enable=E0602, W0622
 # pylint: disable=W0622
 if sys.maxunicode == 0xFFFF:
@@ -51,6 +52,10 @@ class CodePointRange(object):
     The more Pythonic `.start` and `.end` are not used, because range regular
     expressions of the form `[\\Uxxxxxxxx-\\Uxxxxxxxx]` include both the
     first and last code points matched.
+
+    The boolean keyword argument `unpaired_surrogates` determines whether
+    unpaired surrogate code points (U+D800 - U+DFFF) are allowed; by default,
+    they are not permitted.
     '''
     __slots__ = ['first', 'last', 'unpaired_surrogates']
 
@@ -74,14 +79,14 @@ class CodePointRange(object):
         self.unpaired_surrogates = unpaired_surrogates
 
     def __repr__(self):
-        return '{0}.{1}(0x{2:04X}, 0x{3:04X}, unpaired_surrogates={4})'.format(self.__module__, type(self).__name__, self.first, self.last, self.unpaired_surrogates)
+        if not self.unpaired_surrogates:
+            return '{0}.{1}(0x{2:04x}, 0x{3:04x})'.format(self.__module__, type(self).__name__, self.first, self.last)
+        return '{0}.{1}(0x{2:04x}, 0x{3:04x}, unpaired_surrogates={4})'.format(self.__module__, type(self).__name__, self.first, self.last, self.unpaired_surrogates)
+
 
     def __iter__(self):
-        current = self.first
-        last = self.last
-        while current <= last:
-            yield current
-            current += 1
+        for cp in range(self.first, self.last+1):
+            yield cp
 
     def __eq__(self, other):
         if isinstance(other, type(self)) and self.first == other.first and self.last == other.last:
@@ -97,7 +102,24 @@ class CodePointRange(object):
         return self.first <= value <= self.last
 
 
-    def as_generic_re_pattern(self, utf16=False, escapefunc=None):
+    _ascii_alphanums = set([cp for f, l in [('0', '9'), ('A', 'Z'), ('a', 'z')] for cp in range(ord(f), ord(l)+1)])
+
+    @classmethod
+    def generic_escape(cls, cp):
+        '''
+        Code point escape function for generic regular expression patterns.
+        Return ASCII alphanumeric code points as literal characters, and use
+        `\\uXXXX` and `\\UXXXXXXXX` escapes otherwise.
+        '''
+        if cp <= 0xFFFF:
+            if cp in cls._ascii_alphanums:
+                return chr(cp)
+            else:
+                return '\\u{0:04X}'.format(cp)
+        return '\\U{0:08X}'.format(cp)
+
+
+    def as_generic_re_pattern(self, *args, **kwargs):
         '''
         Express the range as a generic regular expression pattern.  With the
         default settings, this is suitable for compiling with the `re`
@@ -106,10 +128,10 @@ class CodePointRange(object):
         correctly since `\\u` and `\\U` escapes were not recognized prior to
         Python 3.3.
 
-        If `utf16=True`, Unicode surrogate pairs are used to represent code
-        points above 0xFFFF.
+        If `surrogate_pairs=True`, Unicode surrogate pairs are used to
+        represent code points above 0xFFFF.
 
-        If `escapefunc` is provided, it must be a function that takes a code
+        If `escape_func` is provided, it must be a function that takes a code
         point as an integer and returns an appropriately escaped string
         representation suitable for use either individually or as part of
         a regular expression range `[<first>-<last>]`.
@@ -117,30 +139,32 @@ class CodePointRange(object):
         Reference for `re` escape support:
             https://docs.python.org/3.6/library/re.html
         '''
-        if utf16 not in (True, False):
-            raise TypeError('"utf16" must be boolean')
-        if escapefunc is None:
-            def ef(cp):
-                if cp <= 0xFFFF:
-                    if any(ord(first) <= cp <= ord(last) for first, last in [('0', '9'), ('A', 'Z'), ('a', 'z')]):
-                        return chr(cp)
-                    else:
-                        return '\\u{0:04X}'.format(cp)
-                return '\\U{0:08X}'.format(cp)
-            escapefunc = ef
-        elif not hasattr(escapefunc, '__call__'):
-            raise TypeError('"escapefunc" must be callable')
+        if args:
+            raise TypeError('Only explicit keyword arguments are accepted')
+        surrogate_pairs = kwargs.pop('surrogate_pairs', False)
+        escape_func = kwargs.pop('escape_func', None)
+        if kwargs:
+            raise TypeError('Invalid keyword argument(s):  {0}'.format(', '.join(str(k) for k in kwargs)))
+        if surrogate_pairs not in (True, False):
+            raise TypeError('"surrogate_pairs" must be boolean')
+        if escape_func is None:
+            escape_func = self.generic_escape
+        elif not hasattr(escape_func, '__call__'):
+            raise TypeError('"escape_func" must be callable')
         if self.first == self.last:
-            if not utf16:
-                pattern = escapefunc(self.first)
+            if not surrogate_pairs:
+                pattern = escape_func(self.first)
             else:
-                pattern = ''.join(escapefunc(ord(c)) for c in coding.chr_surrogate(self.first))
-        elif not utf16 or self.last <= 0xFFFF:
-            pattern = '[{0}-{1}]'.format(escapefunc(self.first), escapefunc(self.last))
+                pattern = ''.join(escape_func(ord(c)) for c in coding.chr_surrogate(self.first))
+        elif not surrogate_pairs or self.last <= 0xFFFF:
+            pattern = '[{0}-{1}]'.format(escape_func(self.first), escape_func(self.last))
         else:
             sub_patterns = []
             if self.first <= 0xFFFF:
-                sub_patterns.append('[{0}-{1}]'.format(escapefunc(self.first), escapefunc(0xFFFF)))
+                if self.first == 0xFFFF:
+                    sub_patterns.append(escape_func(0xFFFF))
+                else:
+                    sub_patterns.append('[{0}-{1}]'.format(escape_func(self.first), escape_func(0xFFFF)))
                 first_astral = 0xFFFF+1
                 last_astral = self.last
             else:
@@ -158,9 +182,9 @@ class CodePointRange(object):
                 if cp_next is None:
                     low_last = l
                     if low_first == low_last:
-                        sub_patterns.append('{0}{1}'.format(escapefunc(high), escapefunc(low_first)))
+                        sub_patterns.append('{0}{1}'.format(escape_func(high), escape_func(low_first)))
                     else:
-                        sub_patterns.append('{0}[{1}-{2}]'.format(escapefunc(high), escapefunc(low_first), escapefunc(low_last)))
+                        sub_patterns.append('{0}[{1}-{2}]'.format(escape_func(high), escape_func(low_first), escape_func(low_last)))
                 else:
                     h_next, l_next = (ord(c) for c in coding.chr_surrogate(cp_next))
                     # Don't need `l_next != l + 1` check since working with
@@ -168,9 +192,9 @@ class CodePointRange(object):
                     if h_next != h:
                         low_last = l
                         if low_first == low_last:
-                            sub_patterns.append('{0}{1}'.format(escapefunc(high), escapefunc(low_first)))
+                            sub_patterns.append('{0}{1}'.format(escape_func(high), escape_func(low_first)))
                         else:
-                            sub_patterns.append('{0}[{1}-{2}]'.format(escapefunc(high), escapefunc(low_first), escapefunc(low_last)))
+                            sub_patterns.append('{0}[{1}-{2}]'.format(escape_func(high), escape_func(low_first), escape_func(low_last)))
                         high = None
             pattern = '|'.join(p for p in sub_patterns)
         return pattern
@@ -184,22 +208,32 @@ class CodePointRange(object):
         return self.as_generic_re_pattern()
 
 
-    def as_python_before_3_3_re_pattern(self, **kwargs):
+    @classmethod
+    def python_before_3_3_escape(cls, cp):
+        '''
+        Code point escape function for generic regular expression patterns.
+        Return ASCII alphanumeric code points as literal characters, and use
+        `\\<literal code point>` otherwise.
+        '''
+        if cp in cls._ascii_alphanums:
+            return chr(cp)
+        return '\\' + chr(cp)
+
+
+    def as_python_before_3_3_re_pattern(self, *args, **kwargs):
         '''
         Express the range as a regular expression pattern suitable for
         compiling with `re` under Python < 3.3, with the specified build
         width.
         '''
-        if 'utf16' not in kwargs:
-            raise TypeError('Keyword argument "utf16" (build width) is required')
-        utf16 = kwargs.pop('utf16')
+        if args:
+            raise TypeError('Only explicit keyword arguments are accepted')
+        if 'surrogate_pairs' not in kwargs:
+            raise TypeError('Keyword argument "surrogate_pairs" (build width) is required')
+        surrogate_pairs = kwargs.pop('surrogate_pairs')
         if kwargs:
             raise TypeError('Invalid keyword argument(s):  {0}'.format(', '.join(str(k) for k in kwargs)))
-        def ef(cp):
-            if any(ord(first) <= cp <= ord(last) for first, last in [('0', '9'), ('A', 'Z'), ('a', 'z')]):
-                return chr(cp)
-            return '\\' + chr(cp)
-        return self.as_generic_re_pattern(utf16=utf16, escapefunc=ef)
+        return self.as_generic_re_pattern(surrogate_pairs=surrogate_pairs, escape_func=self.python_before_3_3_escape)
 
 
     def as_current_python_version_re_pattern(self):
@@ -211,10 +245,10 @@ class CodePointRange(object):
         '''
         if sys.version_info.major == 2 or (sys.version_info.major == 3 and sys.version_info.minor < 3):
             if sys.maxunicode == 0xFFFF:
-                utf16 = True
+                surrogate_pairs = True
             else:
-                utf16 = False
-            version_pattern = self.as_python_before_3_3_re_pattern(utf16=utf16)
+                surrogate_pairs = False
+            version_pattern = self.as_python_before_3_3_re_pattern(surrogate_pairs=surrogate_pairs)
         else:
             version_pattern = self.as_python_3_3_plus_re_pattern()
         return version_pattern
@@ -231,8 +265,6 @@ def codepoints_to_codepointranges(*containers, **kwargs):
     if len(containers) == 0:
         raise TypeError('One or more containers are required as arguments')
     unpaired_surrogates = kwargs.pop('unpaired_surrogates', False)
-    if unpaired_surrogates not in (True, False):
-        raise ValueError('"unpaired_surrogates" must be boolean')
     if kwargs:
         raise TypeError('Unknown keyword argument(s):  {0}'.format(', '.join(str(k) for k in kwargs)))
     for container in containers:
@@ -277,9 +309,15 @@ class CodePointMultiRange(object):
     A collection of non-overlapping CodePointRanges.  Methods allow the
     creation of minimal regular expression patterns.
     '''
-    def __init__(self, codepoints=None, codepointranges=None):
+    def __init__(self, *args, **kwargs):
+        if args:
+            raise TypeError('Only explicit keyword arguments are accepted')
+        codepoints = kwargs.pop('codepoints', None)
+        codepointranges = kwargs.pop('codepointranges', None)
+        if kwargs:
+            raise TypeError('Invalid keyword argument(s):  {0}'.format(', '.join(str(k) for k in kwargs)))
         if (codepoints is None and codepointranges is None) or (codepoints is not None and codepointranges is not None):
-            raise TypeError('A single keyword argument ("codepoints" or "codepointranges") is required')
+            raise TypeError('A single keyword argument is required ("codepoints" or "codepointranges")')
         if codepoints is not None:
             ranges_no_overlap = codepoints_to_codepointranges(codepoints)
         else:
@@ -303,7 +341,7 @@ class CodePointMultiRange(object):
                 if r_next.first in r or r_next.first == r.last + 1:
                     first = min(r.first, r_next.first)
                     last = max(r.last, r_next.last)
-                    unpaired_surrogates = any(r.unpaired_surrogates, r_next.unpaired_surrogates)
+                    unpaired_surrogates = r.unpaired_surrogates or r_next.unpaired_surrogates
                     r = CodePointRange(first, last, unpaired_surrogates=unpaired_surrogates)
                     r_next = next(ranges_iter, None)
                 else:
@@ -314,22 +352,11 @@ class CodePointMultiRange(object):
         self.codepointranges = ranges_no_overlap
 
     def __repr__(self):
-        return '{0}.{1}({3})'.format(self.__module__, type(self).__name__, ', '.join(repr(x) for x in self.codepointranges))
+        return '{0}.{1}({2})'.format(self.__module__, type(self).__name__, ', '.join(repr(x) for x in self.codepointranges))
 
     def __iter__(self):
-        ranges_iter = iter(self.codepointranges)
-        r = next(ranges_iter)
-        current = r.first
-        last = r.last
-        overall_last = self.codepointranges[-1].last
-        while current <= overall_last:
-            yield current
-            current += 1
-            if current > last:
-                r = next(ranges_iter, None)
-                if r is not None:
-                    current = r.first
-                    last = r.last
+        for cp in itertools.chain(*self.codepointranges):
+            yield cp
 
     def __eq__(self, other):
         if isinstance(other, type(self)) and self.codepointranges == other.codepointranges:
@@ -345,37 +372,55 @@ class CodePointMultiRange(object):
         return any(value in r for r in self.codepointranges)
 
 
-    def as_generic_re_pattern(self, utf16=False, escapefunc=None):
+    def _combine_re_patterns(self, re_patterns, surrogate_pairs):
+        if not surrogate_pairs or self.codepointranges[-1].last <= 0xFFFF:
+            final_patterns = []
+            for p, r in zip(re_patterns, self.codepointranges):
+                if r.first == r.last:
+                    final_patterns.append(p)
+                else:
+                    # `[<first>-<last>]` -> `<first>-<last>`
+                    final_patterns.append(p[1:-1])
+            final_pattern = '[{0}]'.format(''.join(final_patterns))
+        elif self.codepointranges[0].first > 0xFFFF:
+            final_pattern = '|'.join(re_patterns)
+        else:
+            bmp_final_patterns = []
+            astral_final_patterns = []
+            for p, r in zip(re_patterns, self.codepointranges):
+                if r.first == r.last:
+                    if r.first <= 0xFFFF:
+                        bmp_final_patterns.append(p)
+                    else:
+                        astral_final_patterns.append(p)
+                else:
+                    if r.last <= 0xFFFF:
+                        bmp_final_patterns.append(p[1:-1])
+                    elif r.first > 0xFFFF:
+                        astral_final_patterns.append(p)
+                    else:
+                        p_bmp, p_astral = p.split('|', 1)
+                        if r.first == 0xFFFF:
+                            bmp_final_patterns.append(p_bmp)
+                        else:
+                            bmp_final_patterns.append(p_bmp[1:-1])
+                        astral_final_patterns.append(p_astral)
+            final_pattern = '[{0}]|{1}'.format(''.join(bmp_final_patterns), '|'.join(astral_final_patterns))
+        return final_pattern
+
+
+    def as_generic_re_pattern(self, *args, **kwargs):
         '''
         Express the range as a generic regular expression pattern.
         '''
-        if len(self._codepointranges) == 1:
-            pattern = self._codepointranges[0].as_generic_re_pattern(utf16=utf16, escapefunc=escapefunc)
-        else:
-            if utf16:
-                bmp_pattern_parts = []
-                astral_pattern_parts = []
-                for r in self._codepointranges:
-                    if r.last <= 0xFFFF:
-                        if r.first == r.last:
-                            bmp_pattern_parts.append(r.as_generic_re_pattern(utf16=utf16, escapefunc=escapefunc))
-                        else:
-                            bmp_pattern_parts.append(r.as_generic_re_pattern(utf16=utf16, escapefunc=escapefunc)[1:-1])
-                    else:
-                        astral_pattern_parts.append(r.as_generic_re_pattern(utf16=utf16, escapefunc=escapefunc)[1:-1])
-                if astral_pattern_parts:
-                    pattern = '[{0}]|{1}'.format(''.join(bmp_pattern_parts), '|'.join(astral_pattern_parts))
-                else:
-                    pattern = '[{0}]'.format(''.join(bmp_pattern_parts))
-            else:
-                pattern_parts = []
-                for r in self._codepointranges:
-                    if r.first == r.last:
-                        pattern_parts.append(r.as_generic_re_pattern(utf16=utf16, escapefunc=escapefunc))
-                    else:
-                        pattern_parts.append(r.as_generic_re_pattern(utf16=utf16, escapefunc=escapefunc)[1:-1])
-                pattern = '[{0}]'.format(''.join(pattern_parts))
-        return pattern
+        if args:
+            raise TypeError('Only explicit keyword arguments are accepted')
+        surrogate_pairs = kwargs.pop('surrogate_pairs', False)
+        escape_func = kwargs.pop('escape_func', None)
+        if kwargs:
+            raise TypeError('Invalid keyword argument(s):  {0}'.format(', '.join(str(k) for k in kwargs)))
+        re_patterns = [r.as_generic_re_pattern(surrogate_pairs=surrogate_pairs, escape_func=escape_func) for r in self.codepointranges]
+        return self._combine_re_patterns(re_patterns, surrogate_pairs)
 
 
     def as_python_3_3_plus_re_pattern(self):
@@ -383,25 +428,26 @@ class CodePointMultiRange(object):
         Express the range as a regular expression pattern suitable for
         compiling with `re` under Python 3.3+.
         '''
-        return self.as_generic_re_pattern()
+        surrogate_pairs = False
+        re_patterns = [r.as_python_3_3_plus_re_pattern() for r in self.codepointranges]
+        return self._combine_re_patterns(re_patterns, surrogate_pairs)
 
 
-    def as_python_before_3_3_re_pattern(self, **kwargs):
+    def as_python_before_3_3_re_pattern(self, *args, **kwargs):
         '''
         Express the range as a regular expression pattern suitable for
         compiling with `re` under Python < 3.3, with the specified build
         width.
         '''
-        if 'utf16' not in kwargs:
-            raise TypeError('Keyword argument "utf16" (build width) is required')
-        utf16 = kwargs.pop('utf16')
+        if args:
+            raise TypeError('Only explicit keyword arguments are accepted')
+        if 'surrogate_pairs' not in kwargs:
+            raise TypeError('Keyword argument "surrogate_pairs" (build width) is required')
+        surrogate_pairs = kwargs.pop('surrogate_pairs')
         if kwargs:
             raise TypeError('Invalid keyword argument(s):  {0}'.format(', '.join(str(k) for k in kwargs)))
-        def ef(cp):
-            if any(ord(first) <= cp <= ord(last) for first, last in [('0', '9'), ('A', 'Z'), ('a', 'z')]):
-                return chr(cp)
-            return '\\' + chr(cp)
-        return self.as_generic_re_pattern(utf16=utf16, escapefunc=ef)
+        re_patterns = [r.as_python_before_3_3_re_pattern(surrogate_pairs=surrogate_pairs) for r in self.codepointranges]
+        return self._combine_re_patterns(re_patterns, surrogate_pairs)
 
 
     def as_current_python_version_re_pattern(self):
@@ -413,10 +459,10 @@ class CodePointMultiRange(object):
         '''
         if sys.version_info.major == 2 or (sys.version_info.major == 3 and sys.version_info.minor < 3):
             if sys.maxunicode == 0xFFFF:
-                utf16 = True
+                surrogate_pairs = True
             else:
-                utf16 = False
-            version_pattern = self.as_python_before_3_3_re_pattern(utf16=utf16)
+                surrogate_pairs = False
+            version_combined_pattern = self.as_python_before_3_3_re_pattern(surrogate_pairs=surrogate_pairs)
         else:
-            version_pattern = self.as_python_3_3_plus_re_pattern()
-        return version_pattern
+            version_combined_pattern = self.as_python_3_3_plus_re_pattern()
+        return version_combined_pattern

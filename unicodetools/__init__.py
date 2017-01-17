@@ -10,5 +10,12 @@
 
 from .version import __version__
 
+
+from .collections import (CodePointRange, codepoints_to_codepointranges,
+                          CodePointMultiRange)
+
+from .coding import chr_surrogate, ord_surrogate
+
 from .datafiles import UNICODE_VERSION, UCDFiles, SecurityFiles
-from .collections import CodePointRange, containers_to_codepointranges
+ucd = UCDFiles()
+security = SecurityFiles()

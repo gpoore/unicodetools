@@ -171,6 +171,7 @@ class CodePointRange(object):
                 first_astral = self.first
                 last_astral = self.last
             high = None
+            high_first = None
             current_iter = iter(range(first_astral, last_astral+1))
             next_iter = iter(range(first_astral, last_astral+1))
             next(next_iter)
@@ -182,9 +183,11 @@ class CodePointRange(object):
                 if cp_next is None:
                     low_last = l
                     if low_first == low_last:
-                        sub_patterns.append('{0}{1}'.format(escape_func(high), escape_func(low_first)))
+                        sub_patterns.append('{0}{1}'.format(*[escape_func(x) for x in (high, low_first)]))
+                    elif high_first is not None and low_first == 0xDC00 and low_last == 0xDFFF:
+                        sub_patterns[-1] = '[{0}-{1}][{2}-{3}]'.format(*[escape_func(x) for x in (high_first, high, low_first, low_last)])
                     else:
-                        sub_patterns.append('{0}[{1}-{2}]'.format(escape_func(high), escape_func(low_first), escape_func(low_last)))
+                        sub_patterns.append('{0}[{1}-{2}]'.format(*[escape_func(x) for x in (high, low_first, low_last)]))
                 else:
                     h_next, l_next = (ord(c) for c in coding.chr_surrogate(cp_next))
                     # Don't need `l_next != l + 1` check since working with
@@ -192,9 +195,16 @@ class CodePointRange(object):
                     if h_next != h:
                         low_last = l
                         if low_first == low_last:
-                            sub_patterns.append('{0}{1}'.format(escape_func(high), escape_func(low_first)))
+                            sub_patterns.append('{0}{1}'.format(*[escape_func(x) for x in (high, low_first)]))
+                            high_first = None
+                        elif high_first is not None and low_first == 0xDC00 and low_last == 0xDFFF:
+                            sub_patterns[-1] = '[{0}-{1}][{2}-{3}]'.format(*[escape_func(x) for x in (high_first, high, low_first, low_last)])
                         else:
-                            sub_patterns.append('{0}[{1}-{2}]'.format(escape_func(high), escape_func(low_first), escape_func(low_last)))
+                            sub_patterns.append('{0}[{1}-{2}]'.format(*[escape_func(x) for x in (high, low_first, low_last)]))
+                            if low_first == 0xDC00 and low_last == 0xDFFF:
+                                high_first = high
+                            else:
+                                high_first = None
                         high = None
             pattern = '|'.join(p for p in sub_patterns)
         return pattern

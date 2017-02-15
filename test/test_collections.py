@@ -95,7 +95,9 @@ def test_CodePointRange():
                     (('\uD800\uDFFE', '\uD801\uDC00'), '\\uD800[\\uDFFE-\\uDFFF]|\\uD801\\uDC00'),
                     (('\uD800\uDFFF', '\uD801\uDC01'), '\\uD800\\uDFFF|\\uD801[\\uDC00-\\uDC01]'),
                     (('\uD800\uDFFF', '\uD802\uDC00'), '\\uD800\\uDFFF|\\uD801[\\uDC00-\\uDFFF]|\\uD802\\uDC00'),
-                    (('\uD800\uDFFF', '\uD802\uDC02'), '\\uD800\\uDFFF|\\uD801[\\uDC00-\\uDFFF]|\\uD802[\\uDC00-\\uDC02]')]:
+                    (('\uD800\uDFFF', '\uD802\uDC02'), '\\uD800\\uDFFF|\\uD801[\\uDC00-\\uDFFF]|\\uD802[\\uDC00-\\uDC02]'),
+                    (('\uD800\uDFFF', '\uD805\uDFFF'), '\\uD800\\uDFFF|[\\uD801-\\uD805][\\uDC00-\\uDFFF]'),
+                    (('\uD800\uDFFF', '\uD806\uDC00'), '\\uD800\\uDFFF|[\\uD801-\\uD805][\\uDC00-\\uDFFF]|\\uD806\\uDC00')]:
         assert mdl.CodePointRange(coding.ord_surrogate(cs[0]), coding.ord_surrogate(cs[1])).as_generic_re_pattern(surrogate_pairs=True) == pat
 
 

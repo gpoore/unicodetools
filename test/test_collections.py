@@ -71,7 +71,12 @@ def test_CodePointRange():
     assert mdl.CodePointRange(0, 10) != mdl.CodePointRange(0, 11)
 
     assert mdl.CodePointRange(0xAF, 0xA10).as_generic_re_pattern() == '[\\u00AF-\\u0A10]'
+    assert mdl.CodePointRange(0xAF, 0xA10).as_generic_re_pattern(as_escaped_source=True) == '[\\\\u00AF-\\\\u0A10]'
+    assert mdl.CodePointRange(0xAF, 0xA10).as_python_3_3_plus_re_pattern(as_escaped_source=True) == '[\\\\u00AF-\\\\u0A10]'
+    assert mdl.CodePointRange(0xAF, 0xA10).as_python_before_3_3_re_pattern(surrogate_pairs=False, as_escaped_source=True) == '[\\\\\\u00AF-\\\\\\u0A10]'
     assert mdl.CodePointRange(0x100AF, 0xF0A10).as_generic_re_pattern() == '[\\U000100AF-\\U000F0A10]'
+    assert mdl.CodePointRange(0x100AF, 0xF0A10).as_generic_re_pattern(as_escaped_source=True) == '[\\\\U000100AF-\\\\U000F0A10]'
+    assert mdl.CodePointRange(0x100AF, 0xF0A10).as_python_before_3_3_re_pattern(surrogate_pairs=False, as_escaped_source=True) == '[\\\\\\U000100AF-\\\\\\U000F0A10]'
 
     for pair in [(0x0, 0x0), (0x100, 0xFFF), (0x30, 0xFF),
                  (0xFFFF-1, 0xFFFF), (0xFFFF-1, 0xFFFF+1), (0xFFFF, 0xFFFF+1),
@@ -99,6 +104,14 @@ def test_CodePointRange():
                     (('\uD800\uDFFF', '\uD805\uDFFF'), '\\uD800\\uDFFF|[\\uD801-\\uD805][\\uDC00-\\uDFFF]'),
                     (('\uD800\uDFFF', '\uD806\uDC00'), '\\uD800\\uDFFF|[\\uD801-\\uD805][\\uDC00-\\uDFFF]|\\uD806\\uDC00')]:
         assert mdl.CodePointRange(coding.ord_surrogate(cs[0]), coding.ord_surrogate(cs[1])).as_generic_re_pattern(surrogate_pairs=True) == pat
+    for cs, pat in [(('\uD800\uDFFF', '\uD801\uDC00'), '\\\\uD800\\\\uDFFF|\\\\uD801\\\\uDC00'),
+                    (('\uD800\uDFFE', '\uD801\uDC00'), '\\\\uD800[\\\\uDFFE-\\\\uDFFF]|\\\\uD801\\\\uDC00'),
+                    (('\uD800\uDFFF', '\uD801\uDC01'), '\\\\uD800\\\\uDFFF|\\\\uD801[\\\\uDC00-\\\\uDC01]'),
+                    (('\uD800\uDFFF', '\uD802\uDC00'), '\\\\uD800\\\\uDFFF|\\\\uD801[\\\\uDC00-\\\\uDFFF]|\\\\uD802\\\\uDC00'),
+                    (('\uD800\uDFFF', '\uD802\uDC02'), '\\\\uD800\\\\uDFFF|\\\\uD801[\\\\uDC00-\\\\uDFFF]|\\\\uD802[\\\\uDC00-\\\\uDC02]'),
+                    (('\uD800\uDFFF', '\uD805\uDFFF'), '\\\\uD800\\\\uDFFF|[\\\\uD801-\\\\uD805][\\\\uDC00-\\\\uDFFF]'),
+                    (('\uD800\uDFFF', '\uD806\uDC00'), '\\\\uD800\\\\uDFFF|[\\\\uD801-\\\\uD805][\\\\uDC00-\\\\uDFFF]|\\\\uD806\\\\uDC00')]:
+        assert mdl.CodePointRange(coding.ord_surrogate(cs[0]), coding.ord_surrogate(cs[1])).as_generic_re_pattern(surrogate_pairs=True, as_escaped_source=True) == pat
 
 
 

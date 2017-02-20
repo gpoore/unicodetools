@@ -158,21 +158,29 @@ regular expression.
 *  ``as_generic_re_pattern()`` returns a generic regular expression pattern.
    Optional boolean keyword argument ``surrogate_pairs`` causes all code
    points above 0xFFFF to be represented with surrogate pairs.  Optional
-   keyword argument ``escape_func`` allows an escape function to be specified
+   keyword argument ``as_escaped_source`` yields results suitable for copying
+   and pasting or otherwise saving as source code in an escaped string
+   (non-raw string where backslashes must be escaped).  Optional keyword
+   argument ``escape_func`` allows an escape function to be specified
    for escaping code points; by default, ``\uXXXX`` and ``\UXXXXXXXX``
    escapes are used for all code points except for ``0-9``, ``A-Z``, and
-   ``a-z``.  If specified, ``escape_func`` must take integers.
+   ``a-z``.  If specified, ``escape_func`` must take two positional
+   arguments:  an integer code point value, and a boolean value for
+   ``as_escaped_source``.
 
 *  ``as_python_3_3_plus_re_pattern()`` returns a regular expression pattern
-   suitable for compiling with ``re`` under Python 3.3+.
+   suitable for compiling with ``re`` under Python 3.3+.  Optional keyword
+   argument ``as_escaped_source`` is accepted.
 
 *  ``as_python_before_3_3_re_pattern(surrogate_pairs=<boolean>)`` returns a
    regular expression pattern suitable for Python < 3.3.  The boolean
    keyword argument ``surrogate_pairs`` is required; it specifies narrow vs.
-   wide Python builds (see ``sys.maxunicode``).
+   wide Python builds (see ``sys.maxunicode``).  Optional keyword
+   argument ``as_escaped_source`` is accepted.
 
 *  ``as_current_python_version_re_pattern()`` detects the version of Python
    currently in use and returns an appropriate regular expression pattern.
+   Optional keyword argument ``as_escaped_source`` is accepted.
 
 .. code::
 
@@ -221,10 +229,14 @@ keyword ``codepointranges`` accepts a sequence of ``CodePointRange``
 instances, such as might be returned by ``codepoints_to_codepointranges()``.
 Note that the keyword must be provided explicitly.
 
-The ``CodePointMultiRange`` class has the same methods for generating
-regular expressions as the ``CodePointRange`` class.  Regular expression
-patterns created with ``CodePointMultiRange`` automatically merge character
-sets ``[<chars>]`` whenever possible, so the produced patterns are concise.
+The ``CodePointMultiRange`` class has the same methods for generating regular
+expressions as the ``CodePointRange`` class.  The methods add an additional,
+optional keyword argument ``wrapwidth`` that allows a line wrapping width to
+be specified for the output.  The default value of ``None`` performs no
+wrapping; integer values ``>= 45`` are accepted (this minimum prevents breaks
+in undesirable locations in more verbose cases).  Regular expression patterns
+created with ``CodePointMultiRange`` automatically merge character sets
+``[<chars>]`` whenever possible, so the produced patterns are concise.
 
 .. code::
 

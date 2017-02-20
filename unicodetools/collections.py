@@ -26,13 +26,13 @@ from . import coding
 import itertools
 
 
-# pylint: disable=E0602, W0622
+# pylint: disable=E0602, W0622, E1101
 if sys.version_info.major == 2:
     str = unicode
     chr = unichr
     itertools.zip_longest = itertools.izip_longest
     range = xrange
-# pylint: enable=E0602, W0622
+# pylint: enable=E0602, W0622, E1101
 # pylint: disable=W0622
 if sys.maxunicode == 0xFFFF:
     chr = coding.chr_surrogate
@@ -105,7 +105,7 @@ class CodePointRange(object):
     _ascii_alphanums = set([cp for f, l in [('0', '9'), ('A', 'Z'), ('a', 'z')] for cp in range(ord(f), ord(l)+1)])
 
     @classmethod
-    def generic_escape(cls, cp):
+    def generic_escape(cls, cp, as_escaped_source):
         '''
         Code point escape function for generic regular expression patterns.
         Return ASCII alphanumeric code points as literal characters, and use
@@ -114,9 +114,14 @@ class CodePointRange(object):
         if cp <= 0xFFFF:
             if cp in cls._ascii_alphanums:
                 return chr(cp)
+            elif as_escaped_source:
+                return '\\\\u{0:04X}'.format(cp)
             else:
                 return '\\u{0:04X}'.format(cp)
-        return '\\U{0:08X}'.format(cp)
+        if as_escaped_source:
+            return '\\\\U{0:08X}'.format(cp)
+        else:
+            return '\\U{0:08X}'.format(cp)
 
 
     def as_generic_re_pattern(self, *args, **kwargs):
@@ -143,6 +148,7 @@ class CodePointRange(object):
             raise TypeError('Only explicit keyword arguments are accepted')
         surrogate_pairs = kwargs.pop('surrogate_pairs', False)
         escape_func = kwargs.pop('escape_func', None)
+        as_escaped_source = kwargs.pop('as_escaped_source', False)
         if kwargs:
             raise TypeError('Invalid keyword argument(s):  {0}'.format(', '.join(str(k) for k in kwargs)))
         if surrogate_pairs not in (True, False):
@@ -151,20 +157,22 @@ class CodePointRange(object):
             escape_func = self.generic_escape
         elif not hasattr(escape_func, '__call__'):
             raise TypeError('"escape_func" must be callable')
+        if as_escaped_source not in (True, False):
+            raise TypeError('"as_escaped_source" must be boolean')
         if self.first == self.last:
             if not surrogate_pairs:
-                pattern = escape_func(self.first)
+                pattern = escape_func(self.first, as_escaped_source)
             else:
-                pattern = ''.join(escape_func(ord(c)) for c in coding.chr_surrogate(self.first))
+                pattern = ''.join(escape_func(ord(c), as_escaped_source) for c in coding.chr_surrogate(self.first))
         elif not surrogate_pairs or self.last <= 0xFFFF:
-            pattern = '[{0}-{1}]'.format(escape_func(self.first), escape_func(self.last))
+            pattern = '[{0}-{1}]'.format(escape_func(self.first, as_escaped_source), escape_func(self.last, as_escaped_source))
         else:
             sub_patterns = []
             if self.first <= 0xFFFF:
                 if self.first == 0xFFFF:
-                    sub_patterns.append(escape_func(0xFFFF))
+                    sub_patterns.append(escape_func(0xFFFF, as_escaped_source))
                 else:
-                    sub_patterns.append('[{0}-{1}]'.format(escape_func(self.first), escape_func(0xFFFF)))
+                    sub_patterns.append('[{0}-{1}]'.format(escape_func(self.first, as_escaped_source), escape_func(0xFFFF, as_escaped_source)))
                 first_astral = 0xFFFF+1
                 last_astral = self.last
             else:
@@ -183,11 +191,11 @@ class CodePointRange(object):
                 if cp_next is None:
                     low_last = l
                     if low_first == low_last:
-                        sub_patterns.append('{0}{1}'.format(*[escape_func(x) for x in (high, low_first)]))
+                        sub_patterns.append('{0}{1}'.format(*[escape_func(x, as_escaped_source) for x in (high, low_first)]))
                     elif high_first is not None and low_first == 0xDC00 and low_last == 0xDFFF:
-                        sub_patterns[-1] = '[{0}-{1}][{2}-{3}]'.format(*[escape_func(x) for x in (high_first, high, low_first, low_last)])
+                        sub_patterns[-1] = '[{0}-{1}][{2}-{3}]'.format(*[escape_func(x, as_escaped_source) for x in (high_first, high, low_first, low_last)])
                     else:
-                        sub_patterns.append('{0}[{1}-{2}]'.format(*[escape_func(x) for x in (high, low_first, low_last)]))
+                        sub_patterns.append('{0}[{1}-{2}]'.format(*[escape_func(x, as_escaped_source) for x in (high, low_first, low_last)]))
                 else:
                     h_next, l_next = (ord(c) for c in coding.chr_surrogate(cp_next))
                     # Don't need `l_next != l + 1` check since working with
@@ -195,12 +203,12 @@ class CodePointRange(object):
                     if h_next != h:
                         low_last = l
                         if low_first == low_last:
-                            sub_patterns.append('{0}{1}'.format(*[escape_func(x) for x in (high, low_first)]))
+                            sub_patterns.append('{0}{1}'.format(*[escape_func(x, as_escaped_source) for x in (high, low_first)]))
                             high_first = None
                         elif high_first is not None and low_first == 0xDC00 and low_last == 0xDFFF:
-                            sub_patterns[-1] = '[{0}-{1}][{2}-{3}]'.format(*[escape_func(x) for x in (high_first, high, low_first, low_last)])
+                            sub_patterns[-1] = '[{0}-{1}][{2}-{3}]'.format(*[escape_func(x, as_escaped_source) for x in (high_first, high, low_first, low_last)])
                         else:
-                            sub_patterns.append('{0}[{1}-{2}]'.format(*[escape_func(x) for x in (high, low_first, low_last)]))
+                            sub_patterns.append('{0}[{1}-{2}]'.format(*[escape_func(x, as_escaped_source) for x in (high, low_first, low_last)]))
                             if low_first == 0xDC00 and low_last == 0xDFFF:
                                 high_first = high
                             else:
@@ -210,16 +218,16 @@ class CodePointRange(object):
         return pattern
 
 
-    def as_python_3_3_plus_re_pattern(self):
+    def as_python_3_3_plus_re_pattern(self, as_escaped_source=False):
         '''
         Express the range as a regular expression pattern suitable for
         compiling with `re` under Python 3.3+.
         '''
-        return self.as_generic_re_pattern()
+        return self.as_generic_re_pattern(as_escaped_source=as_escaped_source)
 
 
     @classmethod
-    def python_before_3_3_escape(cls, cp):
+    def python_before_3_3_escape(cls, cp, as_escaped_source):
         '''
         Code point escape function for generic regular expression patterns.
         Return ASCII alphanumeric code points as literal characters, and use
@@ -227,7 +235,13 @@ class CodePointRange(object):
         '''
         if cp in cls._ascii_alphanums:
             return chr(cp)
-        return '\\' + chr(cp)
+        if as_escaped_source:
+            if cp <= 0xFFFF:
+                return '\\\\\\u{0:04X}'.format(cp)
+            else:
+                return '\\\\\\U{0:08X}'.format(cp)
+        else:
+            return '\\' + chr(cp)
 
 
     def as_python_before_3_3_re_pattern(self, *args, **kwargs):
@@ -241,12 +255,15 @@ class CodePointRange(object):
         if 'surrogate_pairs' not in kwargs:
             raise TypeError('Keyword argument "surrogate_pairs" (build width) is required')
         surrogate_pairs = kwargs.pop('surrogate_pairs')
+        as_escaped_source = kwargs.pop('as_escaped_source', False)
         if kwargs:
             raise TypeError('Invalid keyword argument(s):  {0}'.format(', '.join(str(k) for k in kwargs)))
-        return self.as_generic_re_pattern(surrogate_pairs=surrogate_pairs, escape_func=self.python_before_3_3_escape)
+        return self.as_generic_re_pattern(surrogate_pairs=surrogate_pairs,
+                                          escape_func=self.python_before_3_3_escape,
+                                          as_escaped_source=as_escaped_source)
 
 
-    def as_current_python_version_re_pattern(self):
+    def as_current_python_version_re_pattern(self, as_escaped_source=False):
         '''
         Express the range as a regular expression pattern suitable for
         compiling under the current version of Python.  This accounts for
@@ -258,9 +275,9 @@ class CodePointRange(object):
                 surrogate_pairs = True
             else:
                 surrogate_pairs = False
-            version_pattern = self.as_python_before_3_3_re_pattern(surrogate_pairs=surrogate_pairs)
+            version_pattern = self.as_python_before_3_3_re_pattern(surrogate_pairs=surrogate_pairs, as_escaped_source=as_escaped_source)
         else:
-            version_pattern = self.as_python_3_3_plus_re_pattern()
+            version_pattern = self.as_python_3_3_plus_re_pattern(as_escaped_source=as_escaped_source)
         return version_pattern
 
 
@@ -329,12 +346,15 @@ class CodePointMultiRange(object):
             raise TypeError('Only explicit keyword arguments are accepted')
         codepoints = kwargs.pop('codepoints', None)
         codepointranges = kwargs.pop('codepointranges', None)
+        unpaired_surrogates = kwargs.pop('unpaired_surrogates', None)
         if kwargs:
             raise TypeError('Invalid keyword argument(s):  {0}'.format(', '.join(str(k) for k in kwargs)))
         if (codepoints is None and codepointranges is None) or (codepoints is not None and codepointranges is not None):
             raise TypeError('A single keyword argument is required ("codepoints" or "codepointranges")')
         if codepoints is not None:
-            ranges_no_overlap = codepoints_to_codepointranges(codepoints)
+            if unpaired_surrogates is None:
+                unpaired_surrogates = False
+            ranges_no_overlap = codepoints_to_codepointranges(codepoints, unpaired_surrogates=unpaired_surrogates)
         else:
             ranges = []
             for x in codepointranges:
@@ -356,8 +376,10 @@ class CodePointMultiRange(object):
                 if r_next.first in r or r_next.first == r.last + 1:
                     first = min(r.first, r_next.first)
                     last = max(r.last, r_next.last)
-                    unpaired_surrogates = r.unpaired_surrogates or r_next.unpaired_surrogates
-                    r = CodePointRange(first, last, unpaired_surrogates=unpaired_surrogates)
+                    if unpaired_surrogates is None:
+                        r = CodePointRange(first, last, unpaired_surrogates=r.unpaired_surrogates or r_next.unpaired_surrogates)
+                    else:
+                        r = CodePointRange(first, last, unpaired_surrogates=unpaired_surrogates)
                     r_next = next(ranges_iter, None)
                 else:
                     ranges_no_overlap.append(r)
@@ -387,7 +409,51 @@ class CodePointMultiRange(object):
         return any(value in r for r in self.codepointranges)
 
 
-    def _combine_re_patterns(self, re_patterns, surrogate_pairs):
+    @staticmethod
+    def _wrap_set_to_width(patterns, wrapwidth):
+        if wrapwidth is None:
+            return '[{0}]'.format(''.join(patterns))
+        if not isinstance(wrapwidth, int):
+            raise TypeError
+        if wrapwidth < 45:
+            raise ValueError('Minimum wrapwidth = 45')
+        final_lines = []
+        line = '['
+        for p in patterns:
+            if len(line) + len(p) < wrapwidth:
+                line += p
+            else:
+                final_lines.append(line + '\n')
+                line = ' ' + p
+        if len(line) + 1 < wrapwidth:
+            final_lines.append(line + ']')
+        else:
+            final_lines.append(line + '\n ]')
+        return ''.join(final_lines)
+
+
+    @staticmethod
+    def _wrap_or_to_width(patterns, wrapwidth):
+        patterns = (x for p in patterns for x in p.split('|') )
+        if wrapwidth is None:
+            return '|'.join(patterns)
+        if not isinstance(wrapwidth, int):
+            raise TypeError
+        if wrapwidth < 45:
+            raise ValueError('Minimum wrapwidth = 45')
+        final_lines = []
+        line = ''
+        for p in patterns:
+            if len(line) + len(p) < wrapwidth:
+                line += p + '|'
+            else:
+                final_lines.append(line + '\n')
+                line = p + '|'
+        final_lines.append(line[:-1])
+        return ''.join(final_lines)
+
+
+    def _combine_re_patterns(self, re_patterns, surrogate_pairs, wrapwidth=None):
         if not surrogate_pairs or self.codepointranges[-1].last <= 0xFFFF:
             final_patterns = []
             for p, r in zip(re_patterns, self.codepointranges):
@@ -396,9 +462,9 @@ class CodePointMultiRange(object):
                 else:
                     # `[<first>-<last>]` -> `<first>-<last>`
                     final_patterns.append(p[1:-1])
-            final_pattern = '[{0}]'.format(''.join(final_patterns))
+            final_pattern = self._wrap_set_to_width(final_patterns, wrapwidth)
         elif self.codepointranges[0].first > 0xFFFF:
-            final_pattern = '|'.join(re_patterns)
+            final_pattern = self._wrap_or_to_width(re_patterns, wrapwidth)
         else:
             bmp_final_patterns = []
             astral_final_patterns = []
@@ -420,7 +486,11 @@ class CodePointMultiRange(object):
                         else:
                             bmp_final_patterns.append(p_bmp[1:-1])
                         astral_final_patterns.append(p_astral)
-            final_pattern = '[{0}]|{1}'.format(''.join(bmp_final_patterns), '|'.join(astral_final_patterns))
+            if wrapwidth is None:
+                sep = '|'
+            else:
+                sep = '\n|\n'
+            final_pattern = '{0}{1}{2}'.format(self._wrap_set_to_width(bmp_final_patterns, wrapwidth), sep, self._wrap_or_to_width(astral_final_patterns, wrapwidth))
         return final_pattern
 
 
@@ -432,20 +502,22 @@ class CodePointMultiRange(object):
             raise TypeError('Only explicit keyword arguments are accepted')
         surrogate_pairs = kwargs.pop('surrogate_pairs', False)
         escape_func = kwargs.pop('escape_func', None)
+        as_escaped_source = kwargs.pop('as_escaped_source', False)
+        wrapwidth = kwargs.pop('wrapwidth', None)
         if kwargs:
             raise TypeError('Invalid keyword argument(s):  {0}'.format(', '.join(str(k) for k in kwargs)))
-        re_patterns = [r.as_generic_re_pattern(surrogate_pairs=surrogate_pairs, escape_func=escape_func) for r in self.codepointranges]
-        return self._combine_re_patterns(re_patterns, surrogate_pairs)
+        re_patterns = [r.as_generic_re_pattern(surrogate_pairs=surrogate_pairs, escape_func=escape_func, as_escaped_source=as_escaped_source) for r in self.codepointranges]
+        return self._combine_re_patterns(re_patterns, surrogate_pairs, wrapwidth)
 
 
-    def as_python_3_3_plus_re_pattern(self):
+    def as_python_3_3_plus_re_pattern(self, as_escaped_source=False, wrapwidth=None):
         '''
         Express the range as a regular expression pattern suitable for
         compiling with `re` under Python 3.3+.
         '''
         surrogate_pairs = False
-        re_patterns = [r.as_python_3_3_plus_re_pattern() for r in self.codepointranges]
-        return self._combine_re_patterns(re_patterns, surrogate_pairs)
+        re_patterns = [r.as_python_3_3_plus_re_pattern(as_escaped_source=as_escaped_source) for r in self.codepointranges]
+        return self._combine_re_patterns(re_patterns, surrogate_pairs, wrapwidth)
 
 
     def as_python_before_3_3_re_pattern(self, *args, **kwargs):
@@ -459,13 +531,15 @@ class CodePointMultiRange(object):
         if 'surrogate_pairs' not in kwargs:
             raise TypeError('Keyword argument "surrogate_pairs" (build width) is required')
         surrogate_pairs = kwargs.pop('surrogate_pairs')
+        as_escaped_source = kwargs.pop('as_escaped_source', False)
+        wrapwidth = kwargs.pop('wrapwidth', None)
         if kwargs:
             raise TypeError('Invalid keyword argument(s):  {0}'.format(', '.join(str(k) for k in kwargs)))
-        re_patterns = [r.as_python_before_3_3_re_pattern(surrogate_pairs=surrogate_pairs) for r in self.codepointranges]
-        return self._combine_re_patterns(re_patterns, surrogate_pairs)
+        re_patterns = [r.as_python_before_3_3_re_pattern(surrogate_pairs=surrogate_pairs, as_escaped_source=as_escaped_source) for r in self.codepointranges]
+        return self._combine_re_patterns(re_patterns, surrogate_pairs, wrapwidth)
 
 
-    def as_current_python_version_re_pattern(self):
+    def as_current_python_version_re_pattern(self, as_escaped_source=False, wrapwidth=None):
         '''
         Express the range as a regular expression pattern suitable for
         compiling under the current version of Python.  This accounts for
@@ -477,7 +551,10 @@ class CodePointMultiRange(object):
                 surrogate_pairs = True
             else:
                 surrogate_pairs = False
-            version_combined_pattern = self.as_python_before_3_3_re_pattern(surrogate_pairs=surrogate_pairs)
+            version_combined_pattern = self.as_python_before_3_3_re_pattern(surrogate_pairs=surrogate_pairs,
+                                                                            as_escaped_source=as_escaped_source,
+                                                                            wrapwidth=wrapwidth)
         else:
-            version_combined_pattern = self.as_python_3_3_plus_re_pattern()
+            version_combined_pattern = self.as_python_3_3_plus_re_pattern(as_escaped_source=as_escaped_source,
+                                                                          wrapwidth=wrapwidth)
         return version_combined_pattern
